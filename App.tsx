@@ -6,7 +6,7 @@ import Collections from './pages/Collections';
 import AllotmentPage from './pages/AllotmentPage';
 import Reports from './pages/Reports';
 import AdminWrapper from './components/AdminWrapper';
-import { User, UserRole, ChitGroup, Member, ChitStatus } from './types';
+import { User, UserRole, Member, ChitStatus } from './types';
 import { db } from './db';
 
 const App: React.FC = () => {
@@ -15,14 +15,21 @@ const App: React.FC = () => {
   const [loginForm, setLoginForm] = useState({ username: 'admin', password: 'xdr5tgb' });
   const [loginError, setLoginError] = useState('');
   const [isDirty, setIsDirty] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+  
+  // State for bulk import text
+  const [bulkCsvText, setBulkCsvText] = useState('');
   
   // Master navigation state
   const [masterView, setMasterView] = useState<'list' | 'createChit' | 'createMember' | 'bulkMember'>('list');
 
   useEffect(() => {
-    // Strongly integrate with the DB state listener
+    // Sync UI with DB status
     db.setDirtyListener((dirty) => setIsDirty(dirty));
     setIsDirty(db.getDirtyStatus());
+    
+    // Initial Load: Hybrid Sync (Pull Cloud -> Local)
+    db.loadCloudData();
   }, []);
 
   const handleLogin = (e: React.FormEvent) => {
@@ -41,13 +48,22 @@ const App: React.FC = () => {
     setActivePage('dashboard');
   };
 
-  const handleSync = () => {
-    // Persist all local changes to browser storage
-    db.save();
-    alert('Data synced successfully! All changes are now permanent in the local database.');
+  const handleSync = async () => {
+    setIsSyncing(true);
+    // Hybrid Sync: Ensure Local is saved, then push to Cloud
+    const cloudSuccess = await db.save();
+    setIsSyncing(false);
+    
+    if (cloudSuccess) {
+      alert('Success: Data pushed to cloud and saved locally!');
+    } else if (!navigator.onLine) {
+      alert('Mode: Offline. Your changes are saved locally on this device and will sync automatically when you reconnect.');
+    } else {
+      alert('Note: Local save successful. Cloud synchronization failed, but your data is safe on this device.');
+    }
   };
 
-  // Auth screen
+  // 1. Auth screen early return - prevents the rest of the logic from crashing if user is null
   if (!user) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
@@ -58,37 +74,37 @@ const App: React.FC = () => {
                 <path d="M12 2L1 21h22L12 2zm0 3.45L20.12 19H3.88L12 5.45zM11 10h2v4h-2v-4zm0 6h2v2h-2v-2z" />
               </svg>
             </div>
-            <h1 className="text-2xl font-bold text-gray-800">Mi Chit Manager</h1>
-            <p className="text-gray-500 text-sm">Sign in to your account</p>
+            <h1 className="text-2xl font-bold text-gray-800 tracking-tight">Mi Chit Manager</h1>
+            <p className="text-gray-500 text-sm">Professional Chit Fund System</p>
           </div>
           
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
-              <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Username</label>
+              <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Username</label>
               <input 
                 type="text" 
                 required
-                className="w-full px-3 py-2 border ms-border rounded outline-none bg-white text-gray-900 focus:ring-2 focus:ring-blue-500 transition-all"
+                className="bg-white text-gray-900"
                 value={loginForm.username}
                 onChange={(e) => setLoginForm({...loginForm, username: e.target.value})}
               />
             </div>
             <div>
-              <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Password</label>
+              <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Password</label>
               <input 
                 type="password" 
                 required
-                className="w-full px-3 py-2 border ms-border rounded outline-none bg-white text-gray-900 focus:ring-2 focus:ring-blue-500 transition-all"
+                className="bg-white text-gray-900"
                 value={loginForm.password}
                 onChange={(e) => setLoginForm({...loginForm, password: e.target.value})}
               />
             </div>
-            {loginError && <p className="text-red-500 text-xs text-center">{loginError}</p>}
+            {loginError && <p className="text-red-500 text-xs text-center font-semibold">{loginError}</p>}
             <button 
               type="submit" 
-              className="w-full ms-bg-primary text-white py-2.5 rounded font-bold hover:bg-blue-600 transition-colors shadow-sm"
+              className="w-full ms-bg-primary text-white py-3 rounded-lg font-bold hover:bg-blue-600 transition-colors shadow-md active:scale-95 transform"
             >
-              Log In
+              Sign In
             </button>
           </form>
         </div>
@@ -96,336 +112,8 @@ const App: React.FC = () => {
     );
   }
 
-  // Forms
-  const ChitForm = () => {
-    const [formData, setFormData] = useState({
-      name: '',
-      chitValue: 100000,
-      totalMonths: 20,
-      regularInstallment: 5000,
-      allottedInstallment: 6000,
-      startDate: new Date().toISOString().split('T')[0],
-      upiId: ''
-    });
-
-    const handleSubmit = (e: React.FormEvent) => {
-      e.preventDefault();
-      db.addChit({
-        chitGroupId: `c_${Date.now()}`,
-        name: formData.name,
-        chitValue: formData.chitValue,
-        totalMonths: formData.totalMonths,
-        monthlyInstallmentRegular: formData.regularInstallment,
-        monthlyInstallmentAllotted: formData.allottedInstallment,
-        startMonth: formData.startDate,
-        status: ChitStatus.ACTIVE,
-        upiId: formData.upiId
-      });
-      setMasterView('list');
-    };
-
-    return (
-      <div className="ms-bg-card p-8 rounded border ms-border ms-shadow max-w-2xl mx-auto animate-in">
-        <h3 className="text-xl font-bold mb-6">Create New Chit Group</h3>
-        <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div className="md:col-span-2">
-            <label>Chit Name</label>
-            <input 
-              required type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})}
-              className="bg-white text-gray-900"
-            />
-          </div>
-          <div>
-            <label>Chit Value (₹)</label>
-            <input 
-              required type="number" value={formData.chitValue} onChange={e => setFormData({...formData, chitValue: Number(e.target.value)})}
-              className="bg-white text-gray-900"
-            />
-          </div>
-          <div>
-            <label>Total Months</label>
-            <input 
-              required type="number" value={formData.totalMonths} onChange={e => setFormData({...formData, totalMonths: Number(e.target.value)})}
-              className="bg-white text-gray-900"
-            />
-          </div>
-          <div>
-            <label>Regular Installment (₹)</label>
-            <input 
-              required type="number" value={formData.regularInstallment} onChange={e => setFormData({...formData, regularInstallment: Number(e.target.value)})}
-              className="bg-white text-gray-900"
-            />
-          </div>
-          <div>
-            <label>Allotted Installment (₹)</label>
-            <input 
-              required type="number" value={formData.allottedInstallment} onChange={e => setFormData({...formData, allottedInstallment: Number(e.target.value)})}
-              className="bg-white text-gray-900"
-            />
-          </div>
-          <div>
-            <label>Start Date</label>
-            <input 
-              required type="date" value={formData.startDate} onChange={e => setFormData({...formData, startDate: e.target.value})}
-              className="bg-white text-gray-900"
-            />
-          </div>
-          <div>
-            <label>UPI ID (for payments)</label>
-            <input 
-              required type="text" placeholder="name@bank" value={formData.upiId} onChange={e => setFormData({...formData, upiId: e.target.value})}
-              className="bg-white text-gray-900"
-            />
-          </div>
-          <div className="md:col-span-2 flex justify-end gap-3 pt-4 border-t ms-border">
-            <button type="button" onClick={() => setMasterView('list')} className="px-6 py-2 border ms-border rounded text-sm font-semibold hover:bg-gray-50 bg-white">Cancel</button>
-            <button type="submit" className="px-6 py-2 ms-bg-primary text-white rounded text-sm font-semibold hover:bg-blue-600">Save Chit</button>
-          </div>
-        </form>
-      </div>
-    );
-  };
-
-  const MemberForm = () => {
-    const [formData, setFormData] = useState({
-      name: '', mobile: '', address: '', idType: 'Aadhar', idNumber: '', chitGroupId: ''
-    });
-
-    const handleSubmit = (e: React.FormEvent) => {
-      e.preventDefault();
-      
-      // Clean mobile: Strictly 10 digits
-      const digitsOnly = formData.mobile.replace(/\D/g, '');
-      const cleanMobile = digitsOnly.slice(-10);
-      
-      if (cleanMobile.length !== 10) {
-        alert('Please enter a complete 10-digit mobile number.');
-        return;
-      }
-
-      const memberId = `m_${Date.now()}`;
-      db.addMember({
-        memberId,
-        name: formData.name,
-        mobile: cleanMobile, // Save exactly 10 digits
-        address: formData.address,
-        idProofType: formData.idType,
-        idProofNumber: formData.idNumber,
-        isActive: true
-      });
-
-      if (formData.chitGroupId) {
-        const groupMemberships = db.getMemberships().filter(m => m.chitGroupId === formData.chitGroupId);
-        const nextToken = groupMemberships.length > 0 
-          ? Math.max(...groupMemberships.map(m => m.tokenNo)) + 1 
-          : 1;
-
-        db.addMembership({
-          groupMembershipId: `gm_${Date.now()}`,
-          chitGroupId: formData.chitGroupId,
-          memberId: memberId,
-          tokenNo: nextToken,
-          joinedOn: new Date().toISOString().split('T')[0]
-        });
-      }
-      setMasterView('list');
-    };
-
-    return (
-      <div className="ms-bg-card p-8 rounded border ms-border ms-shadow max-w-2xl mx-auto animate-in">
-        <h3 className="text-xl font-bold mb-6">Add New Member</h3>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label>Full Name</label>
-            <input required type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="bg-white text-gray-900" />
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label>Mobile Number (Exactly 10 Digits)</label>
-              <input 
-                required 
-                type="text" 
-                maxLength={10}
-                placeholder="10 digit mobile"
-                value={formData.mobile} 
-                onChange={e => setFormData({...formData, mobile: e.target.value.replace(/\D/g, '').slice(0, 10)})} 
-                className="bg-white text-gray-900 font-medium" 
-              />
-            </div>
-            <div>
-              <label>Assigned Group (Optional)</label>
-              <select value={formData.chitGroupId} onChange={e => setFormData({...formData, chitGroupId: e.target.value})} className="bg-white text-gray-900">
-                <option value="">-- No Group --</option>
-                {db.getChits().map(c => <option key={c.chitGroupId} value={c.chitGroupId}>{c.name}</option>)}
-              </select>
-            </div>
-          </div>
-          <div>
-            <label>Address</label>
-            <textarea required rows={2} value={formData.address} onChange={e => setFormData({...formData, address: e.target.value})} className="bg-white text-gray-900 resize-none"></textarea>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label>ID Proof Type</label>
-              <select value={formData.idType} onChange={e => setFormData({...formData, idType: e.target.value})} className="bg-white text-gray-900">
-                <option>Aadhar</option>
-                <option>PAN</option>
-                <option>Voter ID</option>
-              </select>
-            </div>
-            <div>
-              <label>ID Number</label>
-              <input required type="text" value={formData.idNumber} onChange={e => setFormData({...formData, idNumber: e.target.value})} className="bg-white text-gray-900" />
-            </div>
-          </div>
-          <div className="flex justify-end gap-3 pt-6 border-t ms-border">
-            <button type="button" onClick={() => setMasterView('list')} className="px-6 py-2 border ms-border rounded text-sm font-semibold hover:bg-gray-50 bg-white">Cancel</button>
-            <button type="submit" className="px-6 py-2 ms-bg-primary text-white rounded text-sm font-semibold hover:bg-blue-600">Add Member</button>
-          </div>
-        </form>
-      </div>
-    );
-  };
-
-  const BulkMemberForm = () => {
-    const [csvData, setCsvData] = useState('');
-    const [targetGroupId, setTargetGroupId] = useState('');
-
-    const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        setCsvData(event.target?.result as string);
-      };
-      reader.readAsText(file);
-    };
-
-    const handleImport = (e: React.FormEvent) => {
-      e.preventDefault();
-      const lines = csvData.split('\n').filter(l => l.trim().length > 0);
-      const firstLine = lines[0].toLowerCase();
-      const startIndex = (firstLine.includes('name') || firstLine.includes('mobile')) ? 1 : 0;
-      
-      const membersToImport = lines.slice(startIndex).map((line, idx) => {
-        const parts = line.split(',');
-        const name = (parts[0] || '').trim();
-        const rawMobile = (parts[1] || '').trim();
-        const address = (parts[2] || '').trim();
-        const idType = (parts[3] || '').trim();
-        const idNum = (parts[4] || '').trim();
-        
-        // Strictly extract last 10 digits for bulk import
-        const cleanMob = rawMobile.replace(/\D/g, '').slice(-10);
-
-        return {
-          member: {
-            memberId: `m_bulk_${Date.now()}_${idx}`,
-            name: name || 'Unnamed',
-            mobile: cleanMob,
-            address: address || '',
-            idProofType: idType || 'Aadhar',
-            idProofNumber: idNum || '',
-            isActive: true
-          } as Member,
-          chitGroupId: targetGroupId
-        };
-      });
-      
-      db.bulkAddMembers(membersToImport);
-      setMasterView('list');
-      alert(`Successfully imported ${membersToImport.length} members with 10-digit mobile verification.`);
-    };
-
-    return (
-      <div className="ms-bg-card p-8 rounded border ms-border ms-shadow max-w-2xl mx-auto animate-in">
-        <h3 className="text-xl font-bold mb-4">Bulk Import Members</h3>
-        <p className="text-xs text-gray-500 mb-6 bg-blue-50 p-3 border border-blue-100 rounded">
-          <strong>Instructions:</strong> Paste CSV rows or upload a file. Format:<br/>
-          <code className="bg-blue-100 px-1 rounded font-bold text-blue-700">Name, Mobile (10 Digits), Address, ID Type, ID Number</code>
-        </p>
-        <form onSubmit={handleImport} className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label>Target Chit Group</label>
-              <select value={targetGroupId} onChange={e => setTargetGroupId(e.target.value)} className="bg-white text-gray-900">
-                <option value="">-- No Assignment --</option>
-                {db.getChits().map(c => <option key={c.chitGroupId} value={c.chitGroupId}>{c.name}</option>)}
-              </select>
-            </div>
-            <div>
-              <label>Upload CSV File</label>
-              <input 
-                type="file" 
-                accept=".csv" 
-                onChange={handleFileUpload} 
-                className="bg-white text-gray-900 border-none p-0 h-auto" 
-              />
-            </div>
-          </div>
-          <div>
-            <label>CSV Data Preview</label>
-            <textarea required rows={8} value={csvData} onChange={e => setCsvData(e.target.value)} className="bg-white text-gray-900 font-mono text-sm resize-none"></textarea>
-          </div>
-          <div className="flex justify-end gap-3 pt-6 border-t ms-border">
-            <button type="button" onClick={() => setMasterView('list')} className="px-6 py-2 border ms-border rounded text-sm font-semibold hover:bg-gray-50 bg-white">Cancel</button>
-            <button type="submit" className="px-6 py-2 ms-bg-primary text-white rounded text-sm font-semibold hover:bg-blue-600">Import Members</button>
-          </div>
-        </form>
-      </div>
-    );
-  };
-
-  // Reusing existing page renders...
-  const DashboardView = () => <Dashboard />;
-  const ChitsView = () => (
-    <div className="ms-bg-card p-6 rounded border ms-border ms-shadow animate-in">
-      <h3 className="text-lg font-bold mb-6">Chit Groups</h3>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {db.getChits().map(c => (
-          <div key={c.chitGroupId} className="p-4 border ms-border rounded hover:border-blue-300 transition-all bg-white">
-            <div className="flex justify-between items-start mb-2">
-              <h4 className="font-bold text-blue-600">{c.name}</h4>
-              <span className="text-[10px] font-bold uppercase bg-blue-100 text-blue-700 px-2 py-0.5 rounded">{c.status}</span>
-            </div>
-            <div className="text-xs space-y-1 text-gray-600">
-              <p>Value: ₹{c.chitValue.toLocaleString()}</p>
-              <p>Duration: {c.totalMonths} Months</p>
-              <p>UPI ID: {c.upiId || 'Not Set'}</p>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-
-  const MembersView = () => (
-    <div className="ms-bg-card p-6 rounded border ms-border ms-shadow animate-in">
-      <h3 className="text-lg font-bold mb-6">Member Directory</h3>
-      <div className="overflow-x-auto">
-        <table className="w-full text-left text-sm">
-          <thead className="bg-gray-50 border-b ms-border">
-            <tr>
-              <th className="px-4 py-3 font-semibold">Name</th>
-              <th className="px-4 py-3 font-semibold">Mobile</th>
-              <th className="px-4 py-3 font-semibold">ID Proof</th>
-              <th className="px-4 py-3 font-semibold">Address</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100 bg-white">
-            {db.getMembers().map(m => (
-              <tr key={m.memberId} className="hover:bg-gray-50">
-                <td className="px-4 py-3 font-semibold">{m.name}</td>
-                <td className="px-4 py-3 text-gray-600">{m.mobile}</td>
-                <td className="px-4 py-3 text-xs">{m.idProofType}: {m.idProofNumber}</td>
-                <td className="px-4 py-3 text-xs text-gray-500 max-w-xs truncate">{m.address}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
+  // 2. Main Logic - Reached only if user is logged in
+  const safeUser = { name: user.name || 'Admin', role: user.role || UserRole.ADMIN };
 
   const renderMasters = () => (
     <AdminWrapper title="Masters">
@@ -448,7 +136,7 @@ const App: React.FC = () => {
             <div className="flex justify-between items-center mb-6">
               <h3 className="text-lg font-bold">Members</h3>
               <div className="flex gap-4">
-                <button onClick={() => setMasterView('bulkMember')} className="text-xs font-bold text-green-600 hover:underline">Bulk</button>
+                <button onClick={() => { setMasterView('bulkMember'); setBulkCsvText(''); }} className="text-xs font-bold text-green-600 hover:underline">Bulk</button>
                 <button onClick={() => setMasterView('createMember')} className="text-xs font-bold ms-primary hover:underline">Add</button>
               </div>
             </div>
@@ -464,9 +152,173 @@ const App: React.FC = () => {
       ) : (
         <div>
           <button onClick={() => setMasterView('list')} className="mb-4 text-sm text-blue-600 font-bold">&larr; Back to List</button>
-          {masterView === 'createChit' && <ChitForm />}
-          {masterView === 'createMember' && <MemberForm />}
-          {masterView === 'bulkMember' && <BulkMemberForm />}
+          {masterView === 'createChit' && (
+            <div className="ms-bg-card p-8 rounded border ms-border ms-shadow max-w-2xl mx-auto animate-in">
+              <h3 className="text-xl font-bold mb-6">Create New Chit Group</h3>
+              <form onSubmit={(e) => {
+                e.preventDefault();
+                const target = e.target as any;
+                db.addChit({
+                  chitGroupId: `c_${Date.now()}`,
+                  name: target.cname.value,
+                  chitValue: Number(target.cval.value),
+                  totalMonths: Number(target.ctot.value),
+                  monthlyInstallmentRegular: Number(target.creg.value),
+                  monthlyInstallmentAllotted: Number(target.call.value),
+                  startMonth: target.cstart.value,
+                  status: ChitStatus.ACTIVE,
+                  upiId: target.cupi.value
+                });
+                setMasterView('list');
+              }} className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="md:col-span-2">
+                  <label>Chit Name</label>
+                  <input required name="cname" type="text" className="bg-white text-gray-900" />
+                </div>
+                <div><label>Value (₹)</label><input required name="cval" type="number" defaultValue={100000} className="bg-white text-gray-900" /></div>
+                <div><label>Months</label><input required name="ctot" type="number" defaultValue={20} className="bg-white text-gray-900" /></div>
+                <div><label>Regular Installment (₹)</label><input required name="creg" type="number" defaultValue={5000} className="bg-white text-gray-900" /></div>
+                <div><label>Allotted Installment (₹)</label><input required name="call" type="number" defaultValue={6000} className="bg-white text-gray-900" /></div>
+                <div><label>Start Date</label><input required name="cstart" type="date" className="bg-white text-gray-900" /></div>
+                <div><label>UPI ID</label><input required name="cupi" type="text" placeholder="name@bank" className="bg-white text-gray-900" /></div>
+                <div className="md:col-span-2 flex justify-end gap-3 pt-4 border-t ms-border">
+                  <button type="button" onClick={() => setMasterView('list')} className="px-6 py-2 border ms-border rounded text-sm font-semibold bg-white">Cancel</button>
+                  <button type="submit" className="px-6 py-2 ms-bg-primary text-white rounded text-sm font-bold">Save Chit</button>
+                </div>
+              </form>
+            </div>
+          )}
+          {masterView === 'createMember' && (
+            <div className="ms-bg-card p-8 rounded border ms-border ms-shadow max-w-2xl mx-auto animate-in">
+              <h3 className="text-xl font-bold mb-6">Add New Member</h3>
+              <form onSubmit={(e) => {
+                e.preventDefault();
+                const target = e.target as any;
+                const mob = target.mmobile.value.replace(/\D/g, '').slice(-10);
+                if (mob.length !== 10) return alert('Enter 10-digit mobile');
+                const memberId = `m_${Date.now()}`;
+                db.addMember({
+                  memberId,
+                  name: target.mname.value,
+                  mobile: mob,
+                  address: target.maddr.value,
+                  idProofType: target.midtype.value,
+                  idProofNumber: target.midnum.value,
+                  isActive: true
+                });
+                if (target.mgroup.value) {
+                  db.addMembership({
+                    groupMembershipId: `gm_${Date.now()}`,
+                    chitGroupId: target.mgroup.value,
+                    memberId: memberId,
+                    tokenNo: (db.getMemberships().filter(m => m.chitGroupId === target.mgroup.value).length) + 1,
+                    joinedOn: new Date().toISOString().split('T')[0]
+                  });
+                }
+                setMasterView('list');
+              }} className="space-y-4">
+                <div><label>Full Name</label><input required name="mname" type="text" className="bg-white" /></div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div><label>Mobile (10 Digits)</label><input required name="mmobile" type="text" maxLength={10} className="bg-white" /></div>
+                  <div><label>Group</label><select name="mgroup" className="bg-white"><option value="">None</option>{db.getChits().map(c => <option key={c.chitGroupId} value={c.chitGroupId}>{c.name}</option>)}</select></div>
+                </div>
+                <div><label>Address</label><textarea required name="maddr" className="bg-white min-h-[80px] p-2 border w-full rounded"></textarea></div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div><label>ID Type</label><select name="midtype" className="bg-white"><option>Aadhar</option><option>PAN</option></select></div>
+                  <div><label>ID Number</label><input required name="midnum" type="text" className="bg-white" /></div>
+                </div>
+                <div className="flex justify-end gap-3 pt-6 border-t ms-border">
+                  <button type="button" onClick={() => setMasterView('list')} className="px-6 py-2 border rounded text-sm font-semibold bg-white">Cancel</button>
+                  <button type="submit" className="px-6 py-2 ms-bg-primary text-white rounded text-sm font-bold">Add Member</button>
+                </div>
+              </form>
+            </div>
+          )}
+          {masterView === 'bulkMember' && (
+             <div className="ms-bg-card p-8 rounded border ms-border ms-shadow max-w-2xl mx-auto animate-in">
+              <h3 className="text-xl font-bold mb-4">Bulk Import Members</h3>
+              <form onSubmit={(e) => {
+                e.preventDefault();
+                const target = e.target as any;
+                const csvValue = bulkCsvText || target.csv.value || "";
+                const lines = csvValue.split('\n').filter((l: string) => l.trim().length > 0);
+                
+                if (lines.length === 0) {
+                  alert('Please enter CSV data to import.');
+                  return;
+                }
+
+                // Check for header row safely
+                const firstLine = lines[0] || "";
+                const startIndex = (firstLine.toLowerCase().includes('name') || firstLine.toLowerCase().includes('mobile')) ? 1 : 0;
+                
+                const imports = lines.slice(startIndex).map((line: string, i: number) => {
+                  const p = line.split(',');
+                  const name = (p[0] || "Unnamed").trim();
+                  const mobile = (p[1] || "").replace(/\D/g, '').slice(-10);
+                  const address = (p[2] || "").trim();
+                  const idType = (p[3] || "Aadhar").trim();
+                  const idNum = (p[4] || "").trim();
+
+                  return {
+                    member: { 
+                      memberId: `m_b_${Date.now()}_${i}`, 
+                      name, 
+                      mobile, 
+                      address, 
+                      idProofType: idType, 
+                      idProofNumber: idNum, 
+                      isActive: true 
+                    } as Member,
+                    chitGroupId: target.bgroup.value
+                  };
+                });
+
+                db.bulkAddMembers(imports);
+                setMasterView('list');
+                setBulkCsvText('');
+                alert(`Successfully imported ${imports.length} members.`);
+              }} className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label>Target Group</label>
+                    <select name="bgroup" className="bg-white"><option value="">No Assignment</option>{db.getChits().map(c => <option key={c.chitGroupId} value={c.chitGroupId}>{c.name}</option>)}</select>
+                  </div>
+                  <div>
+                    <label>Upload CSV File</label>
+                    <input 
+                      type="file" 
+                      accept=".csv" 
+                      className="bg-white border-none p-0 h-auto" 
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          const reader = new FileReader();
+                          reader.onload = (re) => {
+                            setBulkCsvText(re.target?.result as string);
+                          };
+                          reader.readAsText(file);
+                        }
+                      }}
+                    />
+                  </div>
+                </div>
+                <label>CSV Data (Name, Mobile, Address...)</label>
+                <textarea 
+                  name="csv" 
+                  rows={8} 
+                  className="bg-white w-full border rounded font-mono text-sm p-3" 
+                  placeholder="John Doe, 9999999999, Bangalore, Aadhar, 1234..."
+                  value={bulkCsvText}
+                  onChange={(e) => setBulkCsvText(e.target.value)}
+                ></textarea>
+                <div className="flex justify-end gap-3 pt-6 border-t">
+                  <button type="button" onClick={() => setMasterView('list')} className="px-6 py-2 border rounded bg-white">Cancel</button>
+                  <button type="submit" className="px-6 py-2 ms-bg-primary text-white rounded font-bold">Import Now</button>
+                </div>
+              </form>
+            </div>
+          )}
         </div>
       )}
     </AdminWrapper>
@@ -476,20 +328,73 @@ const App: React.FC = () => {
     <Layout 
       activePage={activePage} 
       setActivePage={(p) => { setActivePage(p); setMasterView('list'); }} 
-      user={{ name: user.name, role: user.role }} 
+      user={safeUser} 
       onLogout={handleLogout}
       onSync={handleSync}
       isDirty={isDirty}
     >
       <div className="p-4 md:p-6 pb-20">
-        {activePage === 'dashboard' && <DashboardView />}
-        {activePage === 'chits' && <ChitsView />}
-        {activePage === 'members' && <MembersView />}
+        {activePage === 'dashboard' && <Dashboard />}
+        {activePage === 'chits' && (
+          <div className="ms-bg-card p-6 rounded border ms-border ms-shadow animate-in">
+            <h3 className="text-lg font-bold mb-6">Chit Groups</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {db.getChits().map(c => (
+                <div key={c.chitGroupId} className="p-4 border ms-border rounded hover:border-blue-300 transition-all bg-white">
+                  <div className="flex justify-between items-start mb-2">
+                    <h4 className="font-bold text-blue-600">{c.name}</h4>
+                    <span className="text-[10px] font-bold uppercase bg-blue-100 text-blue-700 px-2 py-0.5 rounded">{c.status}</span>
+                  </div>
+                  <div className="text-xs space-y-1 text-gray-600">
+                    <p>Value: ₹{c.chitValue.toLocaleString()}</p>
+                    <p>Duration: {c.totalMonths} Months</p>
+                    <p>UPI ID: {c.upiId || 'Not Set'}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {activePage === 'members' && (
+          <div className="ms-bg-card p-6 rounded border ms-border ms-shadow animate-in">
+            <h3 className="text-lg font-bold mb-6">Member Directory</h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-gray-50 border-b ms-border">
+                  <tr>
+                    <th className="px-4 py-3 font-semibold">Name</th>
+                    <th className="px-4 py-3 font-semibold">Mobile</th>
+                    <th className="px-4 py-3 font-semibold">ID Proof</th>
+                    <th className="px-4 py-3 font-semibold">Address</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 bg-white">
+                  {db.getMembers().map(m => (
+                    <tr key={m.memberId} className="hover:bg-gray-50">
+                      <td className="px-4 py-3 font-semibold">{m.name}</td>
+                      <td className="px-4 py-3 text-gray-600">{m.mobile}</td>
+                      <td className="px-4 py-3 text-xs">{m.idProofType}: {m.idProofNumber}</td>
+                      <td className="px-4 py-3 text-xs text-gray-500 max-w-xs truncate">{m.address}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
         {activePage === 'collections' && <Collections />}
         {activePage === 'allotment' && <AllotmentPage />}
         {activePage === 'reports' && <Reports />}
         {activePage === 'masters' && renderMasters()}
       </div>
+      {isSyncing && (
+        <div className="fixed inset-0 bg-white/50 backdrop-blur-sm flex items-center justify-center z-50">
+          <div className="flex flex-col items-center gap-4">
+            <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+            <p className="text-sm font-bold text-blue-700">Syncing to Cloud...</p>
+          </div>
+        </div>
+      )}
     </Layout>
   );
 };

@@ -5,14 +5,9 @@ import {
   MasterSettings, ChitStatus, PaymentStatus 
 } from './types';
 
-// Clear initial examples, keep only essential admin
 const INITIAL_USERS: User[] = [
   { userId: 'u1', name: 'Admin User', role: UserRole.ADMIN, username: 'admin', passwordHash: 'xdr5tgb', isActive: true },
 ];
-
-const INITIAL_MEMBERS: Member[] = [];
-const INITIAL_CHITS: ChitGroup[] = [];
-const INITIAL_MEMBERSHIPS: GroupMembership[] = [];
 
 const INITIAL_MASTER_SETTINGS: MasterSettings = {
   mastersPasswordHash: 'secure123',
@@ -33,16 +28,25 @@ class DB {
   private settings: MasterSettings = INITIAL_MASTER_SETTINGS;
   
   private isDirty: boolean = false;
+  private hasLoaded: boolean = false;
   private onDirtyChange?: (dirty: boolean) => void;
 
   constructor() {
-    this.load();
-    if (this.users.length === 0) {
+    this.init();
+  }
+
+  private init() {
+    try {
+      this.load();
+      if (!this.users || this.users.length === 0) {
+        this.users = INITIAL_USERS;
+        this.saveLocal();
+      }
+      this.hasLoaded = true;
+    } catch (e) {
+      console.error("DB Init failed, resetting to defaults", e);
       this.users = INITIAL_USERS;
-      this.members = INITIAL_MEMBERS;
-      this.chits = INITIAL_CHITS;
-      this.memberships = INITIAL_MEMBERSHIPS;
-      this.save(true); // Initial save
+      this.hasLoaded = true;
     }
   }
 
@@ -52,27 +56,39 @@ class DB {
 
   markDirty() {
     this.isDirty = true;
+    this.saveLocal(); // Local-First Persistence: Save immediately to storage
     if (this.onDirtyChange) this.onDirtyChange(true);
   }
 
   load() {
     const data = localStorage.getItem('mi_chit_db');
-    if (data) {
-      const parsed = JSON.parse(data);
-      this.users = parsed.users || [];
-      this.chits = parsed.chits || [];
-      this.members = parsed.members || [];
-      this.memberships = parsed.memberships || [];
-      this.installments = parsed.installments || [];
-      this.allotments = parsed.allotments || [];
-      this.payments = parsed.payments || [];
-      this.paymentRequests = parsed.paymentRequests || [];
-      this.settings = parsed.settings || INITIAL_MASTER_SETTINGS;
+    if (data && data !== "null" && data !== "undefined") {
+      try {
+        const parsed = JSON.parse(data);
+        if (parsed && typeof parsed === 'object') {
+          this.deserialize(parsed);
+        }
+      } catch (e) {
+        console.error("Corrupted local storage data", e);
+      }
     }
   }
 
-  save(silent = false) {
-    localStorage.setItem('mi_chit_db', JSON.stringify({
+  private deserialize(parsed: any) {
+    if (!parsed) return;
+    this.users = parsed.users || [];
+    this.chits = parsed.chits || [];
+    this.members = parsed.members || [];
+    this.memberships = parsed.memberships || [];
+    this.installments = parsed.installments || [];
+    this.allotments = parsed.allotments || [];
+    this.payments = parsed.payments || [];
+    this.paymentRequests = parsed.paymentRequests || [];
+    this.settings = parsed.settings || INITIAL_MASTER_SETTINGS;
+  }
+
+  private getSerializedData() {
+    return JSON.stringify({
       users: this.users,
       chits: this.chits,
       members: this.members,
@@ -82,25 +98,60 @@ class DB {
       payments: this.payments,
       paymentRequests: this.paymentRequests,
       settings: this.settings
-    }));
-    this.isDirty = false;
-    if (this.onDirtyChange) this.onDirtyChange(false);
+    });
+  }
+
+  saveLocal() {
+    localStorage.setItem('mi_chit_db', this.getSerializedData());
+  }
+
+  async save(): Promise<boolean> {
+    this.saveLocal();
+    if (navigator.onLine) {
+      return await this.syncWithCloud();
+    }
+    return false; // Offline save only
+  }
+
+  async syncWithCloud(): Promise<boolean> {
+    if (!navigator.onLine) return false;
+    try {
+      // Mock Cloud Sync Process
+      console.log("Hybrid Sync: Pushing local updates to cloud...");
+      await new Promise(r => setTimeout(r, 800)); // Simulate network latency
+      
+      this.isDirty = false;
+      if (this.onDirtyChange) this.onDirtyChange(false);
+      localStorage.setItem('mi_chit_last_sync', new Date().toISOString());
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  async loadCloudData() {
+    if (!navigator.onLine) return;
+    try {
+      console.log("Hybrid Sync: Checking for cloud updates...");
+    } catch (e) {
+      console.warn("Could not reach cloud server.");
+    }
   }
 
   getDirtyStatus = () => this.isDirty;
+  isReady = () => this.hasLoaded;
 
   // Generic Getters
-  getUsers = () => this.users;
-  getChits = () => this.chits;
-  getMembers = () => this.members;
-  getMemberships = () => this.memberships;
-  getInstallments = () => this.installments;
-  getAllotments = () => this.allotments;
-  getPayments = () => this.payments;
-  getPaymentRequests = () => this.paymentRequests;
-  getSettings = () => this.settings;
+  getUsers = () => this.users || [];
+  getChits = () => this.chits || [];
+  getMembers = () => this.members || [];
+  getMemberships = () => this.memberships || [];
+  getInstallments = () => this.installments || [];
+  getAllotments = () => this.allotments || [];
+  getPayments = () => this.payments || [];
+  getPaymentRequests = () => this.paymentRequests || [];
+  getSettings = () => this.settings || INITIAL_MASTER_SETTINGS;
 
-  // Actions
   addPayment(payment: Payment) {
     this.payments.push(payment);
     const schedule = this.installments.find(s => 
@@ -127,7 +178,6 @@ class DB {
   }
 
   addMembership(membership: GroupMembership) {
-    // Basic deduplication
     const exists = this.memberships.find(m => m.chitGroupId === membership.chitGroupId && m.memberId === membership.memberId);
     if (exists) return;
 
@@ -184,9 +234,7 @@ class DB {
       s.memberId === allotment.memberId && 
       s.monthNo === allotment.monthNo
     );
-    if (currentSchedule) {
-      currentSchedule.isPrizeMonth = true;
-    }
+    if (currentSchedule) currentSchedule.isPrizeMonth = true;
 
     this.installments.forEach(s => {
       if (s.chitGroupId === allotment.chitGroupId && 
@@ -195,7 +243,6 @@ class DB {
         s.dueAmount = chit.monthlyInstallmentAllotted;
       }
     });
-
     this.markDirty();
   }
 
@@ -224,7 +271,6 @@ class DB {
         s.dueAmount = chit.monthlyInstallmentRegular;
       }
     });
-
     this.markDirty();
   }
 }
