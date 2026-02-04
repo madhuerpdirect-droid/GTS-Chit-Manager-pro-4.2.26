@@ -1,0 +1,7 @@
+{
+  "name": "GTS Chit Manager pro 4.2.26",
+  "description": "A professional chit fund management system for tracking installments, allotments, collections, and reports with WhatsApp integration.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
