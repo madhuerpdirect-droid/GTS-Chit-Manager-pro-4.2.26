@@ -17,6 +17,10 @@ const App: React.FC = () => {
   const [isDirty, setIsDirty] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   
+  // PWA/Install State
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [showInstallBanner, setShowInstallBanner] = useState(false);
+
   // State for bulk import text
   const [bulkCsvText, setBulkCsvText] = useState('');
   
@@ -30,7 +34,32 @@ const App: React.FC = () => {
     
     // Initial Load: Hybrid Sync (Pull Cloud -> Local)
     db.loadCloudData();
+
+    // Catch PWA Install Prompt event
+    const handleBeforeInstall = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      setShowInstallBanner(true);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstall);
+
+    // Hide if already in standalone mode
+    if (window.matchMedia('(display-mode: standalone)').matches) {
+      setShowInstallBanner(false);
+    }
+
+    return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
   }, []);
+
+  const handleInstallClick = async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    console.log(`Install choice: ${outcome}`);
+    setDeferredPrompt(null);
+    setShowInstallBanner(false);
+  };
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -50,7 +79,6 @@ const App: React.FC = () => {
 
   const handleSync = async () => {
     setIsSyncing(true);
-    // Hybrid Sync: Ensure Local is saved, then push to Cloud
     const cloudSuccess = await db.save();
     setIsSyncing(false);
     
@@ -63,7 +91,6 @@ const App: React.FC = () => {
     }
   };
 
-  // 1. Auth screen early return - prevents the rest of the logic from crashing if user is null
   if (!user) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
@@ -112,7 +139,6 @@ const App: React.FC = () => {
     );
   }
 
-  // 2. Main Logic - Reached only if user is logged in
   const safeUser = { name: user.name || 'Admin', role: user.role || UserRole.ADMIN };
 
   const renderMasters = () => (
@@ -248,7 +274,6 @@ const App: React.FC = () => {
                   return;
                 }
 
-                // Check for header row safely
                 const firstLine = lines[0] || "";
                 const startIndex = (firstLine.toLowerCase().includes('name') || firstLine.toLowerCase().includes('mobile')) ? 1 : 0;
                 
@@ -333,6 +358,24 @@ const App: React.FC = () => {
       onSync={handleSync}
       isDirty={isDirty}
     >
+      {/* Home Screen Install Prompt */}
+      {showInstallBanner && (
+        <div className="bg-blue-600 text-white p-3 flex items-center justify-between sticky top-0 z-50 shadow-md animate-in slide-in-from-top-full">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-white/20 flex items-center justify-center">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
+              </svg>
+            </div>
+            <p className="text-xs font-bold leading-tight">Install Mi Chit Manager<br/><span className="text-[10px] font-normal opacity-80">Add to home screen for quick access</span></p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setShowInstallBanner(false)} className="text-[10px] uppercase font-bold px-2 py-1 opacity-70 hover:opacity-100">Later</button>
+            <button onClick={handleInstallClick} className="bg-white text-blue-600 px-3 py-1.5 rounded text-[10px] font-bold uppercase shadow-sm active:scale-95 transition-transform">Add</button>
+          </div>
+        </div>
+      )}
+
       <div className="p-4 md:p-6 pb-20">
         {activePage === 'dashboard' && <Dashboard />}
         {activePage === 'chits' && (
